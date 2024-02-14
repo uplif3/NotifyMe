@@ -10,7 +10,7 @@ Checks for restock on the Nvidia GPU Page and sends you the link on Discord.
 - ????
 - Profit
 
-## How does it work?`
+## How does it work?
 
 Opens the Chrome Browser with the Chromedriver every 15 minutes and if there is a Buy link
 it will send it to you so you can buy it on your Device.
