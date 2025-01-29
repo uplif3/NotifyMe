@@ -1,118 +1,135 @@
+import argparse
+import time
+import json
+import requests
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import json
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException
-import traceback
-import requests
-import datetime
-import time
+from webdriver_manager.chrome import ChromeDriverManager
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Check product availability in intervals.")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=15,
+        help="Abstand in Minuten zwischen den Checks (Standard: 15)"
+    )
+    return parser.parse_args()
 
 chrome_options = Options()
-#chrome_options.add_argument("--headless")
+#chrome_options.add_argument("--headless")  # optionaler Headless-Modus
 chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--verbose")
-chrome_options.add_argument("--log-path=chrome.log")
-chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-chrome_options.add_argument("--window-size=1920,1080")
+chrome_options.add_argument(
+    "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+    (KHTML, like Gecko) Chrome/109.0.5414.74 Safari/537.36"
+)
+chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+chrome_options.add_experimental_option("useAutomationExtension", False)
 
+url = "https://marketplace.nvidia.com/de-at/consumer/graphics-cards/"
+discord_webhook_url = "<DISCORD-HOOK>"
 
-chromedriver_path = 'PATH TO THE CHROMEDRIVER'
-discord_webhook_url = 'YOUR DISCORD WEBHOOK LINK'
-
-# The ID from the Classes of the Buy Button
-id4080 = "326781"
-id4060 = "269544"
-
-# Initialisiere den WebDriver
-service = Service(chromedriver_path)
-
-# Link to your Nvidia Store Page
-url = 'https://store.nvidia.com/de-at/geforce/store/?page=1&limit=9&locale=de-at'
-
-
-def check_product_availability(element_id):
-    print("Start next Check")
+def send_discord_notification(message: str):
+    """Kleiner Helper, um eine Nachricht an Discord zu senden."""
+    if not discord_webhook_url:
+        print("Kein Discord-Webhook konfiguriert.")
+        return
+    payload = {"content": message}
     try:
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.get(url)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        print("Seite geladen:", url)
-        print("Suche nach: ", element_id)
-        access_denied_header = driver.find_element(By.TAG_NAME, "h1")
-        if "Access Denied" in access_denied_header.text:
-            print("Zugriff verweigert")
+        response = requests.post(discord_webhook_url, json=payload)
+        if response.status_code == 204:
+            print("Nachricht an Discord gesendet:", message)
         else:
-            wait = WebDriverWait(driver, 20)
-            element = wait.until(EC.presence_of_element_located((By.ID, element_id)))
-            print("Element:")
-            print(element)
-            time.sleep(10)
-            print("Element Outer HTML:")
-            print(element.get_attribute('outerHTML'))
-
-            data = element.get_attribute("innerHTML").strip()
-            if data and data != "[]":
-                print("Element Inner HTML:")
-                print(data)
-                try:
-                    product_info = json.loads(data)
-
-                    if product_info[0]['isAvailable']:
-                        direct_purchase_link = product_info[0]['directPurchaseLink']
-                        print("Produkt ist verfügbar - DirectPurchaseLink:", direct_purchase_link)
-
-                        message = {
-                            "content": f"Produkt ist verfügbar - DirectPurchaseLink: {direct_purchase_link}"
-                        }
-                        response = requests.post(discord_webhook_url, json=message)
-                        if response.status_code == 204:
-                            print("Nachricht wurde an Discord gesendet.")
-                        else:
-                            print("Fehler beim Senden der Nachricht an Discord.")
-                    else:
-                        print("Produkt ist nicht verfügbar.")
-                except json.JSONDecodeError:
-                    print("Fehler beim Parsen von JSON-Daten.")
-            else:
-                print("Keine Daten gefunden im Element Inner HTML.")
-    except NoSuchElementException:
-        print("Das gesuchte Element wurde nicht gefunden.")
+            print(f"Fehler beim Senden an Discord: {response.text}")
     except Exception as e:
-        print(f"Ein Fehler ist aufgetreten: {e}")
-        traceback.print_exc()
+        print(f"Exception beim Senden an Discord: {e}")
+
+
+def check_all_products():
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    try:
+        driver.get(url)
+
+        # Warte, bis Elemente gerendert sind (z.B. Warte auf #resultsDiv)
+        wait = WebDriverWait(driver, 30)
+        wait.until(EC.presence_of_element_located((By.ID, "resultsDiv")))
+
+        # Finde alle <div> mit style="display: none; visibility: hidden;" und ID
+        hidden_divs = driver.find_elements(
+            By.CSS_SELECTOR,
+            "div[style*='display: none'][style*='visibility: hidden'][id]"
+        )
+
+        print(f"Gefundene versteckte DIVs: {len(hidden_divs)}")
+
+        for div in hidden_divs:
+            product_id = div.get_attribute("id")  # z.B. "270775"
+            inner_html = div.get_attribute("innerHTML").strip()
+
+            # Falls das DIV leer ist, überspringen
+            if not inner_html:
+                continue
+
+            # Debug: Direkt den JSON-String ausgeben
+            print(f"\n==> Produkt-ID: {product_id} | RAW JSON:\n{inner_html}\n")
+
+            try:
+                product_info_list = json.loads(inner_html)
+                if not product_info_list:
+                    continue
+
+                # Debug: Parsed JSON anzeigen
+                print(f"Parsed JSON (als Python-Liste): {product_info_list}")
+
+                # In der Regel nur 1 Objekt in der Liste
+                product_info = product_info_list[0]
+                title = product_info.get("productTitle", "")
+                price = product_info.get("salePrice", "")
+                is_available = product_info.get("isAvailable", False)
+                purchase_link = product_info.get("directPurchaseLink", "")
+
+                print(f"Produkt-ID: {product_id} | Titel: {title} | Verfügbar: {is_available} | Preis: {price}")
+
+                # Beispiel-Logik: Wenn verfügbar und nicht "RTX 40" im Titel
+                if is_available:
+                    if "RTX 40" in title.upper():
+                        print(f"SKIP: {title} ist verfügbar, aber wird nicht gemeldet (Ausschluss).")
+                        continue
+
+                    message = f"**{title}** ist JETZT verfügbar für {price}!\nLink: {purchase_link}"
+                    send_discord_notification(message)
+
+            except json.JSONDecodeError:
+                print(f"Konnte JSON für Produkt-ID {product_id} nicht parsen.")
+
+            # kleiner Sleep zwischen den Iterationen
+            time.sleep(1)
+
     finally:
         driver.quit()
-        pass
+
 
 def main():
-    message_sent_today = False
+    args = parse_args()
+    interval_minutes = args.interval
+
+    print(f"Starte Checks alle {interval_minutes} Minuten.")
     try:
         while True:
-            now = datetime.datetime.now()
-            next_run = now + datetime.timedelta(minutes=15)
-            if now.hour == 13 and now.minute < 10 and not message_sent_today:
-                message = {
-                    "content": f"Still Alive!"
-                }
-                response = requests.post(discord_webhook_url, json=message)
-
-                message_sent_today = True
-            elif now.hour != 13:
-                message_sent_today = False
-
-            check_product_availability(id4080) #set the id from the class here
-            
-            time_to_next_run = (next_run - datetime.datetime.now()).total_seconds()
-            time.sleep(max(0, time_to_next_run))
+            check_all_products()
+            print(f"Nächster Check in {interval_minutes} Minuten.")
+            time.sleep(interval_minutes * 60)
     except KeyboardInterrupt:
         print("Skript wurde manuell beendet.")
 
 
-main()
+if __name__ == "__main__":
+    main()
