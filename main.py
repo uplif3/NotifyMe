@@ -51,7 +51,6 @@ def send_discord_notification(message: str):
     except Exception as e:
         print(f"Exception beim Senden an Discord: {e}")
 
-
 def check_all_products():
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -94,9 +93,15 @@ def check_all_products():
                 title = product_info.get("productTitle", "")
                 price = product_info.get("salePrice", "")
                 is_available = product_info.get("isAvailable", False)
-                purchase_link = product_info.get("directPurchaseLink", "")
+                direct_purchase_link = product_info.get("directPurchaseLink", "")
+                purchase_link = product_info.get("purchaseLink", "")
 
                 print(f"Produkt-ID: {product_id} | Titel: {title} | Verfügbar: {is_available} | Preis: {price}")
+
+                # Produkte ignorieren, wenn `directPurchaseLink` und `purchaseLink` identisch sind
+                if is_available and direct_purchase_link == purchase_link:
+                    print(f"SKIP: {title} hat identische Links für Kauf → Keine Meldung an Discord.")
+                    continue
 
                 # Beispiel-Logik: Wenn verfügbar und nicht "RTX 40" im Titel
                 if is_available:
@@ -104,7 +109,7 @@ def check_all_products():
                         print(f"SKIP: {title} ist verfügbar, aber wird nicht gemeldet (Ausschluss).")
                         continue
 
-                    message = f"**{title}** ist JETZT verfügbar für {price}!\nLink: {purchase_link}"
+                    message = f"**{title}** ist JETZT verfügbar für {price}!\nLink: {direct_purchase_link}"
                     send_discord_notification(message)
 
             except json.JSONDecodeError:
@@ -115,7 +120,6 @@ def check_all_products():
 
     finally:
         driver.quit()
-
 
 def main():
     args = parse_args()
@@ -129,7 +133,6 @@ def main():
             time.sleep(interval_minutes * 60)
     except KeyboardInterrupt:
         print("Skript wurde manuell beendet.")
-
 
 if __name__ == "__main__":
     main()
