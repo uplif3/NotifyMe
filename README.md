@@ -2,137 +2,208 @@
 
 Dieses Skript prüft in regelmäßigen Abständen den Bestand an Founders-Edition-Grafikkarten auf der **NVIDIA Marketplace**-Seite. Sobald eine Karte als verfügbar gemeldet wird, sendet das Skript eine Nachricht mit einem Direktlink per Discord-Webhook.
 
+---
+
 ## Features
 
-- **Automatisierter Browser** über [Selenium](https://www.selenium.dev/).  
+- **Automatisierter Browser** über [Selenium](https://www.selenium.dev/) in einem **externen Docker-Container** (z. B. `selenium/standalone-chrome`).  
 - **Benachrichtigung** via [Discord Webhook](https://support.discord.com/hc/de/articles/228383668-Intro-to-Webhooks).  
-- **Individuelles Intervall** per Kommandozeilen-Parameter (`--interval` in Minuten).  
-- **Flexibel anpassbar** für andere NVIDIA-Store-Regionen (z. B. `de-at`, `de-de`, `en-us` etc.).  
+- **Individuelles Intervall** per Kommandozeilen-Parameter (`--interval` in Minuten) oder Umgebungsvariable `INTERVAL`.  
+- **Anpassbare Region** (z. B. `de-at`, `de-de`, `en-us`, etc.).
 
 ---
 
 ## Voraussetzungen
 
-1. **Python 3** (empfohlen ab Version 3.8 oder höher).
-2. **Google Chrome** (installiert auf deinem System).
-3. **Passender ChromeDriver**:
-   - Entweder manuell herunterladen (siehe [ChromeDriver Downloads](https://chromedriver.chromium.org/downloads)) und den Pfad hinterlegen.
-   - Oder das Python-Paket [webdriver_manager](https://pypi.org/project/webdriver-manager/) nutzen, das den Download automatisch verwaltet.
-4. **Discord Webhook URL**  
-   - Erstelle einen Webhook in deinem Discord-Server und kopiere die URL.
+1. **Docker** installiert.  
+2. **Docker-Image mit Selenium** (z. B. `selenium/standalone-chrome` oder ein Selenium Grid):  
+   - Beispiel für einfachen Start:
+     ```bash
+     docker run -d --name selenium_chrome -p 4444:4444 selenium/standalone-chrome
+     ```
+   - Danach ist Selenium erreichbar unter `http://localhost:4444/wd/hub` (oder IP/Port anpassen).  
+3. Dein eigener Docker-Container (oder lokales Python) für das **NotifyMe**-Skript:
+   - Du **benötigst keinen** lokal installierten Chrome/ChromeDriver mehr, da der Zugriff remote auf den Selenium-Container erfolgt.  
+4. **Discord Webhook URL**:
+   - In deinem Discord-Server einen Webhook erstellen und die URL bereithalten.
 
 ---
 
-## Installation
+## Installation (Docker-Variante mit externem Selenium)
 
-1. **Python-Abhängigkeiten installieren**:
-   ```bash
-   pip install --upgrade selenium webdriver_manager requests
-   ```
-2. (Optional) Falls du den ChromeDriver manuell laden willst, setze den Pfad im Skript oder in der Umgebungsvariable:
-   ```python
-   service = Service("/pfad/zu/chromedriver")
-   driver = webdriver.Chrome(service=service, options=chrome_options)
-   ```
-   Standardmäßig nutzt das Skript `webdriver_manager`.
+### 1. Docker-Image für das Skript erstellen
 
-3. **Discord Webhook** in der Variable `discord_webhook_url` im Skript eintragen.
+Erstelle einen Ordner, der dein Skript enthält, z. B. `my_notifyme/`.  
+Dort hinein legst du:
+
+- `script.py` (das eigentliche Python-Skript)  
+- `requirements.txt` (Abhängigkeiten)  
+- `Dockerfile` (Baut dein Skript-Image)
+
+**`requirements.txt`** (Beispiel):
+```
+selenium
+requests
+```
+
+**`Dockerfile`** (Beispiel):
+```dockerfile
+FROM python:3.9-slim
+
+# Environment-Variablen (können via Docker-Run überschrieben werden)
+ENV SELENIUM_URL="http://localhost:4444/wd/hub"
+ENV INTERVAL=15
+ENV DISCORD_WEBHOOK_URL=""
+
+# Python-Ausgabe nicht puffern
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY script.py /app/
+
+CMD ["sh", "-c", "python script.py --interval ${INTERVAL}"]
+```
+
+In diesem Beispiel:
+- `SELENIUM_URL` zeigt standardmäßig auf `http://localhost:4444/wd/hub`, kann aber überschrieben werden.  
+- `INTERVAL` ist das Standard-Intervall (15 Minuten).  
+- `DISCORD_WEBHOOK_URL` wird hier leer gelassen, du kannst es später beim `docker run -e DISCORD_WEBHOOK_URL=...` belegen.
+
+Baue das Docker-Image:
+
+```bash
+cd my_notifyme
+docker build -t notifyme .
+```
+
+### 2. Selenium-Container starten
+
+Falls noch nicht geschehen, starte den **Selenium-Standalone-Chrome**-Container:
+
+```bash
+docker run -d --name selenium_chrome -p 4444:4444 selenium/standalone-chrome
+```
+
+Damit läuft Selenium auf `http://localhost:4444/wd/hub`.
+
+### 3. NotifyMe-Container starten
+
+Starte nun dein Docker-Image. Übergebe **Selenium-URL**, **Interval** und **Discord-Webhook** (falls gewünscht) als Umgebungsvariablen:
+
+```bash
+docker run --rm \
+  -e SELENIUM_URL="http://<DEINE-SELENIUM-IP>:4444/wd/hub" \
+  -e INTERVAL=10 \
+  -e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/DEIN_WEBHOOK" \
+  notifyme
+```
+
+- `SELENIUM_URL` zeigt auf den Selenium-Container (lokal `localhost`, in einem Docker-Netzwerk ggf. `selenium_chrome:4444/wd/hub`).  
+- `INTERVAL=10` → Prüft alle 10 Minuten (statt 15).  
+- `DISCORD_WEBHOOK_URL` = deine echte Webhook-URL.  
+
+Wenn alles klappt, siehst du Log-Ausgaben:
+- `[DEBUG] main() gestartet.`
+- `[DEBUG] Rufe check_all_products() auf...`
+- usw.
+
+Das Skript schickt einmalig beim Start eine Meldung an Discord und dann bei jedem Fund einer verfügbaren GPU ebenfalls eine Nachricht.
 
 ---
 
-## Konfiguration
+## Konfiguration / Code-Anpassung
 
-- **URL** anpassen:  
-  Standardmäßig ist `https://marketplace.nvidia.com/de-at/consumer/graphics-cards/` hinterlegt.  
-  Möchtest du eine andere Region, passe die Variable `url` im Skript an, z. B.:
-  ```python
-  url = "https://marketplace.nvidia.com/de-de/consumer/graphics-cards/"
-  ```
-- **Filtern von Produkten**:  
-  Im Skript wird jedes Produkt geparst, das in den JSON-Daten auftaucht. Du kannst im Code Logik anpassen (z. B. bestimmte RTX-Modelle ausschließen).
-- **Prüfintervall**:  
-  Per `--interval` (in Minuten) festlegen. Standard sind 15 Minuten.  
+### 1. URL (Region) ändern
+
+Im `script.py` findest du eine Variable:
+
+```python
+url = "https://marketplace.nvidia.com/de-at/consumer/graphics-cards/"
+```
+
+Passe hier die Region an, z. B.:
+
+```python
+url = "https://marketplace.nvidia.com/de-de/consumer/graphics-cards/"
+```
+
+### 2. Produkte filtern
+
+Im Code siehst du, wie JSON geparst wird und wie das Skript Verfügbarkeit (`isAvailable`) prüft.  
+Du kannst selbst festlegen, ob manche Produkte oder bestimmte Modelle ignoriert werden sollen (z. B. eine `if "RTX 40" in title.upper(): continue`-Bedingung).
+
+### 3. Headless-Modus (optional)
+
+In `script.py` findest du:
+```python
+# chrome_options.add_argument("--headless")
+```
+Wenn du das entkommentierst, läuft Selenium ohne sichtbaren Browser. Für Docker-Umgebungen ist Headless oft sinnvoll, sollte aber mit `selenium/standalone-chrome` meistens auch standardmäßig so funktionieren. Bei Problemen kannst du `--headless` aktivieren.
 
 ---
 
-## Nutzung
+## Nutzung außerhalb von Docker (lokal)
 
-1. **Skript ausführen** (Standardintervall: 15 Minuten):
+Möchtest du das Skript **lokal** ausführen (z. B. mit einer lokalen Chrome-Installation oder lokalem Selenium-Container), kannst du:
+
+1. Python-Abhängigkeiten installieren:
    ```bash
-   python main.py
+   pip install selenium requests
    ```
-2. **Skript mit benutzerdefiniertem Intervall**:
+2. **Selenium-Server (Standalone)** starten oder eine lokale Chrome-Installation + ChromeDriver einrichten.  
+3. Skript ausführen:
    ```bash
-   python main.py --interval 5
+   python script.py --interval 15
    ```
-   (Wiederholt den Check alle 5 Minuten.)
-
-Während der Ausführung:
-
-- Öffnet sich ein Chrome-Browser (sofern du **nicht** den Headless-Modus aktivierst).
-- Das Skript lädt die Seite, findet alle JSON-Blöcke, in denen Informationen über die GPUs stehen, und wertet das `isAvailable`-Feld aus.  
-- Wenn eine Karte verfügbar ist, wird automatisch eine Nachricht an deinen konfigurierten Discord-Webhook geschickt.
+   (oder Umgebungsvariablen wie `SELENIUM_URL` entsprechend setzen).
 
 ---
 
 ## Tipps & Hinweise
 
-1. **Shadowban-Risiko**  
-   Wenn du das Intervall zu kurz einstellst (z. B. unter 1 Minute), kann die Webseite dich blockieren oder „Access Denied“ senden. 15 Minuten sind erfahrungsgemäß sicherer.  
-2. **User-Agent & Anti-Bot**  
-   Sollte die Seite abweichende Daten liefern, kannst du mit dem User-Agent in `chrome_options.add_argument(...)` experimentieren, um wie ein normaler Browser aufzutreten.  
-3. **Session/Cookies**  
-   Manchmal erhält man erst bei Login oder bestimmten Cookies die korrekten Daten. Bei Bedarf kannst du Cookies importieren (z. B. `driver.add_cookie`).  
-4. **Discord-Webhook-Sicherheit**  
-   Teile die Webhook-URL nicht öffentlich. Sonst könnten Fremde Nachrichten in deinen Channel senden.
+1. **Selenium-URL (Docker-Netzwerk)**  
+   Wenn du `selenium_chrome` und `notifyme` im selben Docker-Netzwerk laufen lässt, kannst du anstelle von `http://localhost:4444/wd/hub` z. B. `http://selenium_chrome:4444/wd/hub` verwenden. Stelle nur sicher, dass beide Container im selben Netzwerk sind.  
+
+2. **Access Denied / Shadowban**  
+   Wenn du den Shop zu oft anfragst (z. B. Intervall < 1 Minute), kann der Seitenbetreiber dich blockieren oder die Seite reagiert mit „Access Denied“. Ein Intervall von 10-15 Minuten ist oft sicherer.  
+
+3. **Debugging**  
+   Achte auf die `[DEBUG]`-Ausgaben im Container-Log. Wenn du nichts bekommst, prüfe, ob das Skript ordnungsgemäß gestartet ist (z. B. `docker logs <container-id>`).  
+
+4. **Discord Webhook Sicherheit**  
+   Teile deine Webhook-URL nicht öffentlich. Sonst könnten Unbefugte deinen Discord-Channel zuspammen.
 
 ---
 
-## Wie funktioniert’s?
+## Funktionsweise (Kurzfassung)
 
-1. **Aufruf**: Das Skript startet einen automatisierten Chrome-Browser via Selenium.  
-2. **Seite laden**: Es ruft die URL des NVIDIA Marketplace auf, wartet bis `#resultsDiv` sichtbar ist.  
-3. **JSON auslesen**: Alle `<div>`-Container mit Produktdaten werden im Hintergrund (CSS `display: none` + `visibility: hidden`) gefunden und der darin enthaltene JSON-Text wird geparst.  
-4. **Prüfung**:  
-   - Für jedes Produkt wird `isAvailable` sowie `directPurchaseLink` geprüft.  
-   - Wenn verfügbar, wird sofort eine Discord-Nachricht geschickt – inklusive Kauf-Link.  
-5. **Pause & Wiederholung**: Das Skript schläft für das angegebene Intervall (`--interval`) und wiederholt dann den Vorgang.
+1. **Script startet** und verbindet sich über `webdriver.Remote(command_executor=<SELENIUM_URL>)` zum Selenium-Container.  
+2. **Seite laden**: Das Skript lädt `marketplace.nvidia.com/...`.  
+3. **Produkt-Daten**: Alle versteckten `<div>`-Container mit JSON werden geparst.  
+4. **Verfügbarkeit prüfen**: Ist `isAvailable == True`, wird ein Discord-Webhook ausgelöst, inkl. Link zum Kauf.  
+5. **Schleife**: Danach schläft das Skript für das gewählte Intervall (z. B. 10 oder 15 Minuten) und wiederholt den Vorgang.
 
 ---
 
 ## Beispiel für eine erfolgreiche Benachrichtigung
 
-Du erhältst auf Discord z. B.:
-
 ```
-**NVIDIA GeForce RTX 4080 SUPER** ist JETZT verfügbar für 1129.0!
-Link: https://marketplace.nvidia.com/de-at/consumer/graphics-cards/nvidia-geforce-rtx-4080-super/
+**NVIDIA GeForce RTX 4070 Ti Founders Edition** ist JETZT verfügbar für 899.0!
+Link: https://marketplace.nvidia.com/de-at/consumer/graphics-cards/nvidia-geforce-rtx-4070ti-fe/
 ```
 
-Danach kannst du direkt auf den Link klicken und die Karte kaufen.
-
----
-
-## Bekannte Probleme
-
-- **„Access Denied“ oder leere Ergebnisse**:  
-  Meistens zu hohes Abfrageintervall. Ggf. Intervall verlängern oder Proxy wechseln.  
-- **Unterschiedliche Daten in Browser vs. Bot**:  
-  Oft haben Shops A/B-Tests, Regionseinstellungen oder setzen Cookies, die du im Bot nicht hast. Ggf. den User-Agent anpassen oder Cookies übertragen.
-- **Fehler beim JSON-Parsing**:  
-  Wenn NVIDIA das Layout ändert, muss ggf. der Selektor im Code aktualisiert werden.
-- **Headless**:
-  Der Headless Modus funktioniert nicht, verwende diesen nicht!
+Klicke direkt auf den Link, um (sofern vorrätig) zu kaufen.
 
 ---
 
 ## Autor & Lizenz
 
-- Das Skript wurde ursprünglich von [@uplif3](https://github.com/uplif3) erstellt und angepasst für die neue NVIDIA Marketplace-Struktur.  
-- Du kannst es nach Belieben verändern und teilen. Bitte teile Verbesserungen gerne zurück!  
+- Das Skript wurde ursprünglich von [@uplif3](https://github.com/uplif3) erstellt und für die neue NVIDIA Marketplace-Struktur sowie Docker + externem Selenium angepasst.  
+- Du kannst es gerne weiterverbreiten und anpassen.  
+- Falls du Änderungen oder Verbesserungen hast, freuen wir uns über einen Pull Request oder Issue!
 
----
-
-### Viel Erfolg und Spaß beim automatisierten GPU-Shopping!  
-
-Falls du Fragen hast oder Hilfe beim Anpassen benötigst, erstelle ein Issue oder melde dich bei [@uplif3](https://github.com/uplif3). 
+### Viel Erfolg beim GPU-Jagen per Docker-Skript!
